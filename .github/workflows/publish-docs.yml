@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.repository == 'skydoves/compose-stability-analyzer'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
