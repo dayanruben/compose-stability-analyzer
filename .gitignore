@@ -60,3 +60,4 @@ google-services.json
 CLAUDE.md
 docs/api
 .junie
+.env
