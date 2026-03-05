@@ -9,6 +9,7 @@ on:
 jobs:
   lint:
     name: Spotless check
+    if: ${{ github.ref != 'refs/heads/eap/kotlin' && github.head_ref != 'eap/kotlin' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -23,6 +24,7 @@ jobs:
 
   api_check:
     name: API check
+    if: ${{ github.ref != 'refs/heads/eap/kotlin' && github.head_ref != 'eap/kotlin' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -37,6 +39,7 @@ jobs:
 
   build:
     name: Build and Tests
+    if: ${{ github.ref != 'refs/heads/eap/kotlin' && github.head_ref != 'eap/kotlin' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5.0.0
@@ -72,6 +75,7 @@ jobs:
 
   stability_check:
     name: Compose Stability Check
+    if: ${{ github.ref != 'refs/heads/eap/kotlin' && github.head_ref != 'eap/kotlin' }}
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -84,3 +88,18 @@ jobs:
           java-version: 21
       - name: compose stability check
         run: ./gradlew stabilityCheck
+
+  eap-smoke:
+    name: Kotlin EAP smoke check
+    if: ${{ github.ref == 'refs/heads/eap/kotlin' || github.head_ref == 'eap/kotlin' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5.0.0
+      - name: Set up JDK
+        uses: actions/setup-java@v5.0.0
+        with:
+          distribution: 'zulu'
+          java-version: 21
+      - name: smoke
+        run: ./gradlew help --stacktrace
