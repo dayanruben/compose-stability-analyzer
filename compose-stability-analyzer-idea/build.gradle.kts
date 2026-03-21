@@ -14,19 +14,22 @@
  * limitations under the License.
  */
 plugins {
-  kotlin("jvm")
+  // Pinned to Kotlin 2.3.0 — the K2 Analysis API from IntelliJ 2025.2 uses context receivers,
+  // which are removed in Kotlin 2.3.20. This module is built separately from the main project.
+  kotlin("jvm") version "2.3.0"
   id("org.jetbrains.intellij.platform") version "2.10.1"
-  id(libs.plugins.spotless.get().pluginId)
+  id("com.diffplug.spotless") version "6.21.0"
 }
 
 kotlin {
   explicitApi()
 }
 
-group = project.property("GROUP") as String
-version = project.property("VERSION_NAME") as String
+group = "com.github.skydoves"
+version = "0.7.1"
 
 repositories {
+  mavenLocal()
   mavenCentral()
 
   intellijPlatform {
@@ -35,7 +38,7 @@ repositories {
 }
 
 dependencies {
-  implementation(project(":stability-runtime"))
+  implementation("com.github.skydoves:compose-stability-runtime-jvm:0.7.1")
 
   intellijPlatform {
     intellijIdeaCommunity("2025.2")
