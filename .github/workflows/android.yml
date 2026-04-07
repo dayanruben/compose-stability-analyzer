@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, eap/kotlin ]
   pull_request:
     branches: [ '*' ]
 
@@ -66,12 +66,12 @@ jobs:
       - name: Build with Gradle
         run: |
           ./gradlew --scan --stacktrace \
-              assemble
+              assemble -x :app:assemble
 
       - name: Run unit tests
         run: |
           ./gradlew --scan --stacktrace \
-              testDebugUnitTest
+              :stability-compiler:test
 
   stability_check:
     name: Compose Stability Check

@@ -24,7 +24,7 @@ import java.io.File
  * This is necessary because the compiler test framework needs to know where to find
  * the standard library JARs (kotlin-stdlib, kotlin-reflect, etc.) when compiling test files.
  */
-object ClasspathBasedStandardLibrariesPathProvider : KotlinStandardLibrariesPathProvider() {
+object ClasspathBasedStandardLibrariesPathProvider : KotlinStandardLibrariesPathProvider {
 
   private val jars =
     System.getProperty("java.class.path")
@@ -84,4 +84,6 @@ object ClasspathBasedStandardLibrariesPathProvider : KotlinStandardLibrariesPath
   }
 
   override fun commonStdlibForTests(): File = getFile("kotlin-stdlib")
+
+  override fun webStdlibForTests(): File = getFile("kotlin-stdlib")
 }

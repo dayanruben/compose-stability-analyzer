@@ -212,7 +212,7 @@ This is incredibly useful for:
 First, add the plugin to the `[plugins]` section of your `libs.versions.toml` file:
 
 ```toml
-stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.7.0" }
+stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.7.2" }
 ```
 
 Then, apply it to your root `build.gradle.kts` with `apply false`:
@@ -234,7 +234,8 @@ It’s **strongly recommended to use the exact same Kotlin version** as this lib
 
 | Stability Analyzer | Kotlin |
 |--------------------|-------------|
-| 0.6.5+             | 2.3.0 |
+| 0.7.2+             | 2.3.20 |
+| 0.6.5~0.7.0        | 2.3.0 |
 | 0.4.0~0.6.4        | 2.2.21 |
 
 ### TraceRecomposition Annotation
@@ -835,6 +836,11 @@ composeStabilityAnalyzer {
       
         // Allow the check to run, even if the baseline does not exist (default: false)
         allowMissingBaseline.set(false)
+
+        // Add stability configuration file
+        // Matches compose's identical property 
+        // (see https://developer.android.com/develop/ui/compose/performance/stability/fix#configuration-file)
+        stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("stability_config.conf"))
     }
 }
 ```
@@ -871,6 +877,46 @@ composeStabilityAnalyzer {
     }
 }
 ```
+
+#### `stabilityConfigurationFiles` Option
+
+You can provide stability configuration files to tell `stabilityCheck` which types should be treated as stable, even if the compiler marks them as unstable. This matches the [Compose compiler's stability configuration file](https://developer.android.com/develop/ui/compose/performance/stability/fix#configuration-file) format, so you can reuse the same file for both the compiler and stability validation.
+
+This is useful when:
+- Third-party library types don't have `@Stable` or `@Immutable` annotations
+- Code-generated types are effectively stable but the compiler can't infer it
+- You want the stability check to respect the same overrides as the Compose compiler
+
+```kotlin
+composeStabilityAnalyzer {
+    stabilityValidation {
+        // Use the same stability configuration file as the Compose compiler
+        stabilityConfigurationFiles.add(
+            rootProject.layout.projectDirectory.file("stability_config.conf")
+        )
+    }
+}
+```
+
+**Example `stability_config.conf`:**
+
+```
+// Types from third-party libraries
+com.google.firebase.auth.FirebaseUser
+com.squareup.moshi.JsonAdapter
+
+// All types in a package
+com.example.generated.*
+
+// All types in a package and its sub-packages
+com.example.models.**
+```
+
+The file supports `*` (single-level wildcard) and `**` (multi-level wildcard) patterns. Lines starting with `//` are treated as comments.
+
+When `stabilityConfigurationFiles` is set, the `stabilityCheck` task treats any parameter type matching these patterns as stable. This means:
+- New composables with all parameters matching these patterns won't be flagged
+- Parameter stability changes from UNSTABLE to a matching type won't be reported as regressions
 
 **Why ignore packages/classes**
 

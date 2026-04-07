@@ -47,7 +47,7 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
 
     // This version should match the version in gradle.properties
     // Update this when bumping the library version
-    private const val VERSION = "0.7.0"
+    private const val VERSION = "0.7.1"
 
     // Compiler option keys
     private const val OPTION_ENABLED = "enabled"
@@ -96,6 +96,8 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
       outputDir.set(extension.stabilityValidation.outputDir)
       ignoredPackages.set(extension.stabilityValidation.ignoredPackages)
       ignoredClasses.set(extension.stabilityValidation.ignoredClasses)
+      stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
+      unstableOnly.set(extension.stabilityValidation.unstableOnly)
     }
 
     // Register stability check task
@@ -114,6 +116,7 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
       quietCheck.set(extension.stabilityValidation.quietCheck)
       ignoreNonRegressiveChanges.set(extension.stabilityValidation.ignoreNonRegressiveChanges)
       allowMissingBaseline.set(extension.stabilityValidation.allowMissingBaseline)
+      stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
     }
 
     // Make check task depend on stabilityCheck if enabled (only if check task exists)
@@ -161,6 +164,8 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
         ignoredPackages.set(extension.stabilityValidation.ignoredPackages)
         ignoredClasses.set(extension.stabilityValidation.ignoredClasses)
         stabilityFileSuffix.set(variant.name)
+        stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
+        unstableOnly.set(extension.stabilityValidation.unstableOnly)
       }
 
       // Register stability check task
@@ -180,6 +185,7 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
         stabilityFileSuffix.set(variant.name)
         ignoreNonRegressiveChanges.set(extension.stabilityValidation.ignoreNonRegressiveChanges)
         allowMissingBaseline.set(extension.stabilityValidation.allowMissingBaseline)
+        stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
       }
 
       aggregateDumpTask.configure {
