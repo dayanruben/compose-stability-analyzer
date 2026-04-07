@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 plugins {
-  // Pinned to Kotlin 2.3.0 — the K2 Analysis API from IntelliJ 2025.2 uses context receivers,
-  // which are removed in Kotlin 2.3.20. This module is built separately from the main project.
-  kotlin("jvm") version "2.3.0"
+  // Keep the IntelliJ plugin aligned with the Kotlin EAP branch.
+  kotlin("jvm") version "2.3.21-RC"
   id("org.jetbrains.intellij.platform") version "2.10.1"
   id("com.diffplug.spotless") version "6.21.0"
 }
