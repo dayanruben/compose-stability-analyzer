@@ -17,7 +17,7 @@ plugins {
   id(libs.plugins.android.application.get().pluginId)
   id(libs.plugins.kotlin.android.get().pluginId)
   id(libs.plugins.compose.compiler.get().pluginId)
-  id(libs.plugins.compose.stability.analyzer.get().pluginId)
+  alias(libs.plugins.compose.stability.analyzer)
 }
 
 android {
@@ -55,6 +55,14 @@ android {
 
   lint {
     disable += "NullSafeMutableLiveData"
+  }
+}
+
+composeStabilityAnalyzer {
+  // Auto-instrument every composable in debug builds so the IDE plugin's Heatmap,
+  // Reality Check, and Stability Doctor get module-wide runtime data without annotations.
+  traceAll {
+    enabled.set(true)
   }
 }
 

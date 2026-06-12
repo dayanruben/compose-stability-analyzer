@@ -21,6 +21,8 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
@@ -78,11 +80,13 @@ internal class HeatmapInlayManager(
     val inlay: Inlay<*>,
     val displayText: String,
     val color: Color,
+    val fqName: String? = null,
   )
 
   /** A composable's anchor in the editor plus its (cached) static stability verdict. */
   private data class ComposableAnchor(
     val name: String,
+    val fqName: String?,
     val offset: Int,
     val verdict: ComposableStabilityInfo?,
   )
@@ -92,6 +96,8 @@ internal class HeatmapInlayManager(
     val offset: Int,
     val displayText: String,
     val color: Color,
+    val tooltip: String,
+    val fqName: String? = null,
   )
 
   /**
@@ -103,6 +109,9 @@ internal class HeatmapInlayManager(
 
   @Volatile
   private var refreshTask: ScheduledFuture<*>? = null
+
+  /** True while a snapshot→compute→apply refresh cycle is running (ticks are skipped). */
+  private val refreshInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
   @Volatile
   private var listenersRegistered = false
@@ -125,7 +134,7 @@ internal class HeatmapInlayManager(
         if (!entry.inlay.isValid) continue
         val bounds = entry.inlay.bounds ?: continue
         if (bounds.contains(point)) {
-          openHeatmapPanel(name)
+          openHeatmapPanel(entry.fqName, name)
           return
         }
       }
@@ -163,7 +172,7 @@ internal class HeatmapInlayManager(
           activeTooltipInlay = entry.inlay
           // Get LIVE data (not cached renderer html)
           val data =
-            service.getHeatmapData(name) ?: return
+            service.getHeatmapData(entry.fqName, name) ?: return
           val html = buildTooltipHtml(data)
           if (html.isEmpty()) return
           val balloon = com.intellij.openapi.ui.popup
@@ -215,12 +224,14 @@ internal class HeatmapInlayManager(
           try {
             if (project.isDisposed) return@scheduleWithFixedDelay
             service.flushParser()
+            // Skip the tick while a previous refresh is still computing.
+            if (!refreshInFlight.compareAndSet(false, true)) return@scheduleWithFixedDelay
             ApplicationManager.getApplication().invokeLater(
-              { refreshAllEditors() },
+              { snapshotEditorsAndRefresh() },
               ModalityState.any(),
             )
           } catch (_: Exception) {
-            // Guard against disposal races
+            refreshInFlight.set(false)
           }
         },
         500L,
@@ -247,30 +258,77 @@ internal class HeatmapInlayManager(
     refreshTask = null
   }
 
-  // ── Core logic (all runs on EDT) ────────────────────────────────────────
+  // ── Core logic ─────────────────────────────────────────────────────────────
+  // Refresh runs in three stages — snapshot editors (EDT) → compute desired inlays
+  // (pooled thread, read actions) → apply inlay mutations (EDT) — so the EDT never
+  // runs PSI/K2 analysis (Issue #168).
 
-  private fun refreshAllEditors() {
-    if (project.isDisposed) return
-    if (!settings.isHeatmapEnabled) return
-    if (!service.isRunning && !settings.showHeatmapWhenStopped) {
-      clearAllInlays()
-      return
-    }
+  private fun snapshotEditorsAndRefresh() {
+    try {
+      if (project.isDisposed || !settings.isHeatmapEnabled) {
+        refreshInFlight.set(false)
+        return
+      }
+      if (!service.isRunning && !settings.showHeatmapWhenStopped) {
+        clearAllInlays()
+        refreshInFlight.set(false)
+        return
+      }
+      // Keep previous inlays during indexing; retry on the next tick.
+      if (DumbService.getInstance(project).isDumb) {
+        refreshInFlight.set(false)
+        return
+      }
 
-    for (editor in EditorFactory.getInstance().allEditors) {
-      if (editor.isDisposed || editor.project != project) continue
-      refreshEditor(editor)
-    }
+      val editors = EditorFactory.getInstance().allEditors
+        .filter { !it.isDisposed && it.project == project }
 
-    // Clean up entries for disposed editors
-    editorState.keys.removeAll { key ->
-      EditorFactory.getInstance().allEditors.none { System.identityHashCode(it) == key }
+      // Clean up entries for disposed editors.
+      editorState.keys.removeAll { key ->
+        editors.none { System.identityHashCode(it) == key }
+      }
+
+      com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().execute {
+        computeAndApply(editors)
+      }
+    } catch (t: Throwable) {
+      refreshInFlight.set(false)
+      throw t
     }
   }
 
-  private fun refreshEditor(editor: Editor) {
+  /** Stage 2 (pooled thread): all analysis happens here, inside read actions. */
+  private fun computeAndApply(editors: List<Editor>) {
+    try {
+      val computed = editors.mapNotNull { editor ->
+        if (editor.isDisposed || project.isDisposed) return@mapNotNull null
+        val desired = computeDesiredInlays(editor) ?: return@mapNotNull null
+        editor to desired
+      }
+      ApplicationManager.getApplication().invokeLater(
+        {
+          try {
+            if (!project.isDisposed) {
+              computed.forEach { (editor, desired) ->
+                if (!editor.isDisposed) applyDesiredInlays(editor, desired)
+              }
+            }
+          } finally {
+            refreshInFlight.set(false)
+          }
+        },
+        ModalityState.any(),
+      )
+    } catch (t: Throwable) {
+      refreshInFlight.set(false)
+      if (t is ProcessCanceledException) throw t
+    }
+  }
+
+  private fun computeDesiredInlays(editor: Editor): Map<String, DesiredInlay>? {
     val realityEnabled = settings.isRealityCheckEnabled
     val anchors = runReadAction {
+      if (project.isDisposed || editor.isDisposed) return@runReadAction null
       val psiFile = PsiDocumentManager.getInstance(project)
         .getPsiFile(editor.document) as? KtFile ?: return@runReadAction null
       PsiTreeUtil.findChildrenOfType(psiFile, KtNamedFunction::class.java)
@@ -279,25 +337,33 @@ internal class HeatmapInlayManager(
           val name = fn.name ?: return@mapNotNull null
           val anchor = fn.nameIdentifier ?: fn.funKeyword ?: return@mapNotNull null
           val verdict = if (realityEnabled) cachedVerdict(fn) else null
-          ComposableAnchor(name, anchor.textRange.startOffset, verdict)
+          ComposableAnchor(name, fn.fqName?.asString(), anchor.textRange.startOffset, verdict)
         }
-    } ?: return
+    } ?: return null
 
-    val editorKey = System.identityHashCode(editor)
-    val entries = editorState.getOrPut(editorKey) { mutableMapOf() }
-
-    // Figure out what should be shown. The reality grade is folded into displayText so the
-    // cache-diff below invalidates the inlay on a grade-only change, not just a count change.
+    // The reality grade is folded into displayText so the apply-stage diff invalidates on
+    // grade-only changes; the tooltip is prebuilt so the EDT never touches live data.
     val desired = mutableMapOf<String, DesiredInlay>()
     for (anchor in anchors) {
-      val data = service.getHeatmapData(anchor.name) ?: continue
+      // fqName-first lookup: same-named composables across packages resolve precisely on
+      // runtimes that report (fq:); simple-name fallback keeps old runtimes working.
+      val data = service.getHeatmapData(anchor.fqName, anchor.name) ?: continue
       val reality = anchor.verdict?.let { RealityClassifier.classify(it, data) }
       desired[anchor.name] = DesiredInlay(
         offset = anchor.offset,
         displayText = buildDisplayText(data, reality),
         color = severityColor(data, reality),
+        tooltip = buildTooltipHtml(data),
+        fqName = anchor.fqName,
       )
     }
+    return desired
+  }
+
+  /** Stage 3 (EDT): inlay-model mutations only — no analysis, no live-data access. */
+  private fun applyDesiredInlays(editor: Editor, desired: Map<String, DesiredInlay>) {
+    val editorKey = System.identityHashCode(editor)
+    val entries = editorState.getOrPut(editorKey) { mutableMapOf() }
 
     // Remove inlays for composables no longer needed
     val toRemoveNames = entries.keys - desired.keys
@@ -319,10 +385,8 @@ internal class HeatmapInlayManager(
       // Text changed or inlay is new/invalid: dispose old, create new
       existing?.inlay?.let { if (it.isValid) it.dispose() }
 
-      val data = service.getHeatmapData(name) ?: continue
-      val tooltip = buildTooltipHtml(data)
       val renderer =
-        HeatmapBlockRenderer(d.displayText, d.color, editor, tooltip)
+        HeatmapBlockRenderer(d.displayText, d.color, editor, d.tooltip)
       val inlay = editor.inlayModel.addBlockElement(
         d.offset,
         true, // relatesToPrecedingText
@@ -331,7 +395,7 @@ internal class HeatmapInlayManager(
         renderer,
       )
       if (inlay != null) {
-        entries[name] = InlayEntry(inlay, d.displayText, d.color)
+        entries[name] = InlayEntry(inlay, d.displayText, d.color, d.fqName)
       } else {
         entries.remove(name)
       }
@@ -536,7 +600,7 @@ internal class HeatmapInlayManager(
    * Opens the Heatmap tab in the tool window and displays
    * recomposition data for the given composable.
    */
-  private fun openHeatmapPanel(composableName: String) {
+  private fun openHeatmapPanel(fqName: String?, composableName: String) {
     ApplicationManager.getApplication().invokeLater {
       val toolWindow = ToolWindowManager.getInstance(project)
         .getToolWindow("Compose Stability Analyzer") ?: return@invokeLater
@@ -546,7 +610,7 @@ internal class HeatmapInlayManager(
         toolWindow.contentManager.setSelectedContent(heatmapContent)
         val panel = heatmapContent.component
           .getClientProperty(HeatmapPanel::class.java) as? HeatmapPanel ?: return@show
-        panel.showComposableData(composableName)
+        panel.showComposableData(fqName, composableName)
       }
     }
   }
