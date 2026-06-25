@@ -15,7 +15,7 @@
  */
 plugins {
   // Keep the IntelliJ plugin aligned with the Kotlin EAP branch.
-  kotlin("jvm") version "2.4.20-Beta1"
+  kotlin("jvm") version "2.4.10-RC"
   id("org.jetbrains.intellij.platform") version "2.10.1"
   id("com.diffplug.spotless") version "6.21.0"
 }
