@@ -15,6 +15,7 @@
  */
 package com.skydoves.compose.stability.compiler.lower
 
+import com.skydoves.compose.stability.compiler.FqNameMatcher
 import com.skydoves.compose.stability.compiler.StabilityInfoCollector
 import com.skydoves.compose.stability.runtime.ParameterStability
 import org.jetbrains.kotlin.backend.common.IrElementTransformerVoidWithContext
@@ -49,6 +50,7 @@ public class StabilityAnalyzerTransformer(
   private val projectDependencies: List<String> = emptyList(),
   private val traceAll: Boolean = false,
   private val traceAllThreshold: Int = 2,
+  private val stabilityConfigurationMatchers: List<FqNameMatcher> = emptyList(),
 ) : IrElementTransformerVoidWithContext() {
 
   private val composableFqName = FqName("androidx.compose.runtime.Composable")
@@ -471,7 +473,7 @@ public class StabilityAnalyzerTransformer(
    * 1. Nullable types (MUST be first)
    * 2. Type parameters (T, E, K, V) - RUNTIME
    * 3. Function types (including suspend) - STABLE
-   * 4. Known stable types
+   * 4. Known stable types and stability configuration files types
    * 5. @Stable/@Immutable annotations
    * 6. Primitives
    * 7. String
@@ -544,6 +546,13 @@ public class StabilityAnalyzerTransformer(
     // If we can't resolve to a class, it's likely a type parameter
     if (classSymbol == null) {
       return ParameterStability.RUNTIME
+    }
+
+    // 2b'. Stability configuration file types - an explicit user override that a type is stable.
+    // Checked before every instability determination (including the known-unstable Java types
+    // below) so the override always wins, matching the Compose compiler's configuration file.
+    if (isStabilityConfigurationFileType(type)) {
+      return ParameterStability.STABLE
     }
 
     // 2c. Known unstable types (Java mutable classes)
@@ -927,6 +936,11 @@ public class StabilityAnalyzerTransformer(
     return fqName in KNOWN_STABLE_TYPES
   }
 
+  private fun isStabilityConfigurationFileType(type: IrType): Boolean {
+    val fqName = type.classFqName?.asString() ?: return false
+    return stabilityConfigurationMatchers.any { it.matches(fqName) }
+  }
+
   /**
    * Check if a function has @Preview annotation (directly or via meta-annotation).
    * This includes:
@@ -1080,6 +1094,9 @@ public class StabilityAnalyzerTransformer(
         type.isSuspendFunctionTypeOrSubtype() ||
         type.render().contains("suspend ") ||
         type.render().contains("SuspendFunction") -> "function type"
+      // Checked before @Stable / known-stable to match the analysis precedence: a configured type
+      // is forced stable regardless of its own annotations (issue #176).
+      isStabilityConfigurationFileType(type) -> "stability configuration file type"
       type.hasStableAnnotation() -> "marked @Stable or @Immutable"
       isKnownStableType(type) -> "known stable type"
       else -> "class with no mutable properties"

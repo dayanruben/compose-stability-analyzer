@@ -49,6 +49,24 @@ public class IrDumpTestGenerated extends AbstractIrDumpTest {
   }
 
   @Test
+  @TestMetadata("StabilityConfigurationFile.kt")
+  public void testStabilityConfigurationFile() {
+    run("StabilityConfigurationFile.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityConfigurationFileMismatch.kt")
+  public void testStabilityConfigurationFileMismatch() {
+    run("StabilityConfigurationFileMismatch.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityConfigurationFileNoConfig.kt")
+  public void testStabilityConfigurationFileNoConfig() {
+    run("StabilityConfigurationFileNoConfig.kt");
+  }
+
+  @Test
   @TestMetadata("TraceAllInjection.kt")
   public void testTraceAllInjection() {
     run("TraceAllInjection.kt");
