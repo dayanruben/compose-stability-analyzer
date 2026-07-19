@@ -26,8 +26,9 @@ import com.skydoves.compose.stability.runtime.ReceiverKind
 import com.skydoves.compose.stability.runtime.ReceiverStabilityInfo
 import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.analyze
+import org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaFunctionSymbol
-import org.jetbrains.kotlin.analysis.api.symbols.contextParameters
+import org.jetbrains.kotlin.analysis.api.types.KaType
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtNamedFunction
 
@@ -232,12 +233,12 @@ internal object StabilityAnalyzerK2 {
       )
     }
 
-    // 3. Context parameters (formerly context receivers). Migrated to KaContextParameterSymbol
-    // because Kotlin 2.4 / IDEA 2026.3 drops KaContextReceiver + KaContextReceiversOwner
-    // (issue #177, KT-87310); context parameters are stable as of Kotlin 2.4.
-    @Suppress("EXPERIMENTAL_API_USAGE")
-    functionSymbol.contextParameters.forEach { contextParameter ->
-      val contextType = contextParameter.returnType
+    // 3. Context parameters (formerly context receivers). JetBrains asked us to migrate off
+    // KaContextReceiver (removed in IDEA 2026.3 / Kotlin 2.4, issue #177, KT-87310) to
+    // KaContextParameterSymbol. That symbol API does not exist in older IDEs (2024.2 / 2024.3), so
+    // it is read reflectively (see contextParameterReturnTypes) to keep one binary compatible
+    // across the supported IDE range without the plugin verifier flagging a missing symbol.
+    contextParameterReturnTypes(functionSymbol).forEach { contextType ->
       val stability = with(inferencer) { ktStabilityOf(contextType) }
 
       receivers.add(
@@ -252,4 +253,29 @@ internal object StabilityAnalyzerK2 {
 
     return receivers
   }
+
+  /**
+   * Return types of [symbol]'s context parameters, read reflectively.
+   *
+   * `KaCallableSymbol.contextParameters` (and the `KaContextParameterSymbol` element type) only
+   * exist in the Kotlin Analysis API bundled with newer IDEs; older IDEs (2024.2 / 2024.3) do not
+   * ship them. A direct call makes the JetBrains Plugin Verifier report a "method/class not found"
+   * against those IDEs and risks a linkage error at runtime. Reading the property reflectively keeps
+   * a single plugin binary compatible across the whole supported range: IDEs that have the API get
+   * context-parameter stability, and on older IDEs this returns an empty list so context parameters
+   * are simply not analyzed. Each element is kept typed as its stable [KaCallableSymbol] supertype
+   * to avoid referencing `KaContextParameterSymbol`.
+   */
+  private fun KaSession.contextParameterReturnTypes(symbol: KaFunctionSymbol): List<KaType> =
+    runCatching {
+      val kaCallableSymbolKt =
+        Class.forName("org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbolKt")
+      val getContextParameters =
+        kaCallableSymbolKt.methods.first { it.name == "getContextParameters" }
+      val contextParameters = when (getContextParameters.parameterCount) {
+        1 -> getContextParameters.invoke(null, symbol)
+        else -> getContextParameters.invoke(null, this, symbol)
+      }
+      (contextParameters as? List<*>).orEmpty().mapNotNull { (it as? KaCallableSymbol)?.returnType }
+    }.getOrDefault(emptyList())
 }

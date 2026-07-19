@@ -27,6 +27,7 @@ import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.symbols.KaClassKind
 import org.jetbrains.kotlin.analysis.api.symbols.KaClassLikeSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaClassSymbol
+import org.jetbrains.kotlin.analysis.api.symbols.KaPropertyGetterSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaPropertySymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaSymbolModality
 import org.jetbrains.kotlin.analysis.api.types.KaType
@@ -715,7 +716,20 @@ internal class KtStabilityInferencer(
    * (default) getter reliably marks a stored `val`/`var`. Delegated properties are always kept.
    */
   private fun KaPropertySymbol.isComputedGetterOnly(): Boolean = runCatching {
-    !isDelegatedProperty && !hasBackingField && getter?.isNotDefault == true
+    !isDelegatedProperty && !hasBackingField && (getter?.isNotDefaultReflective() == true)
+  }.getOrDefault(false)
+
+  /**
+   * `KaPropertyGetterSymbol.isNotDefault`, read reflectively.
+   *
+   * The property was added in a newer Kotlin Analysis API than some supported IDEs ship, so a direct
+   * call makes the JetBrains Plugin Verifier report a "method not found" against those older IDEs
+   * (2024.2 / 2024.3 / 2025.1). Reading it reflectively keeps one plugin binary compatible across
+   * the range; when the property is absent the getter is conservatively treated as default (false),
+   * so the property is kept in inference rather than dropped.
+   */
+  private fun KaPropertyGetterSymbol.isNotDefaultReflective(): Boolean = runCatching {
+    javaClass.getMethod("isNotDefault").invoke(this) as? Boolean ?: false
   }.getOrDefault(false)
 
   /**
