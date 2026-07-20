@@ -16,9 +16,11 @@
 package com.skydoves.compose.stability.compiler
 
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
 import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.compiler.plugin.registerExtension
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
 
@@ -56,6 +58,13 @@ public class StabilityAnalyzerPluginRegistrar : CompilerPluginRegistrar() {
       2,
     )
 
+    val stabilityConfigurationFiles = configuration.getList(
+      StabilityAnalyzerConfigurationKeys.KEY_STABILITY_CONFIGURATION_FILES,
+    )
+
+    val messageCollector = configuration.get(CommonConfigurationKeys.MESSAGE_COLLECTOR_KEY)
+      ?: MessageCollector.NONE
+
     // Register FIR extensions for frontend analysis (K2).
     // Kotlin 2.4.0 (KT-83341) moved K2 extension registration off the IntelliJ
     // ProjectExtensionDescriptor mechanism; use the ExtensionStorage-scoped helpers so the
@@ -71,6 +80,8 @@ public class StabilityAnalyzerPluginRegistrar : CompilerPluginRegistrar() {
         projectDependencies = projectDependencies,
         traceAll = traceAll,
         traceAllThreshold = traceAllThreshold,
+        stabilityConfigurationFiles = stabilityConfigurationFiles,
+        messageCollector = messageCollector,
       ),
     )
   }

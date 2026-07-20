@@ -17,6 +17,7 @@ package com.skydoves.compose.stability.gradle
 
 import org.gradle.api.Project
 import org.gradle.api.provider.Provider
+import org.jetbrains.kotlin.gradle.plugin.FilesSubpluginOption
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
@@ -45,7 +46,7 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
     // This version should match the version in gradle.properties (VERSION_NAME).
     // Update this when bumping the library version — it pins the compiler/runtime
     // artifacts the Gradle plugin pulls onto the Kotlin compile classpath.
-    internal const val VERSION = "0.10.0"
+    internal const val VERSION = "0.11.0"
 
     // Compiler option keys
     private const val OPTION_ENABLED = "enabled"
@@ -53,6 +54,7 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
     private const val OPTION_PROJECT_DEPENDENCIES = "projectDependencies"
     private const val OPTION_TRACE_ALL = "traceAll"
     private const val OPTION_TRACE_ALL_THRESHOLD = "traceAllThreshold"
+    private const val OPTION_STABILITY_CONFIGURATION_FILE = "stabilityConfigurationFile"
 
     /**
      * Get the runtime project if available.
@@ -157,6 +159,10 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
       val traceAllEnabled = extension.traceAll.enabled.get() &&
         compilationAcceptsTraceAll(kotlinCompilation, extension.traceAll.variants.get())
 
+      val stabilityConfigurationFiles = extension
+        .stabilityConfigurationFiles
+        .getOrElse(emptyList())
+
       listOf(
         SubpluginOption(
           key = OPTION_ENABLED,
@@ -178,7 +184,16 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
           key = OPTION_TRACE_ALL_THRESHOLD,
           value = extension.traceAll.threshold.get().toString(),
         ),
-      )
+      ) + stabilityConfigurationFiles.map { file ->
+        // FilesSubpluginOption (one per file, so each option value is a single path) registers the
+        // configuration file as a compile-task input, so editing its contents invalidates the
+        // Kotlin compilation and regenerates stability-info.json. A plain SubpluginOption would only
+        // track the path string, leaving stale results when the file changes in place (issue #176).
+        FilesSubpluginOption(
+          key = OPTION_STABILITY_CONFIGURATION_FILE,
+          files = listOf(file.asFile),
+        )
+      }
     }
   }
 

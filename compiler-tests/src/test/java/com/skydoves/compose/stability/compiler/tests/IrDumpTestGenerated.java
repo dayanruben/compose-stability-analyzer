@@ -31,6 +31,12 @@ public class IrDumpTestGenerated extends AbstractIrDumpTest {
   }
 
   @Test
+  @TestMetadata("InheritedComputedPropertyStability.kt")
+  public void testInheritedComputedPropertyStability() {
+    run("InheritedComputedPropertyStability.kt");
+  }
+
+  @Test
   @TestMetadata("MutableDataClass.kt")
   public void testMutableDataClass() {
     run("MutableDataClass.kt");
@@ -40,6 +46,24 @@ public class IrDumpTestGenerated extends AbstractIrDumpTest {
   @TestMetadata("SimpleDataClass.kt")
   public void testSimpleDataClass() {
     run("SimpleDataClass.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityConfigurationFile.kt")
+  public void testStabilityConfigurationFile() {
+    run("StabilityConfigurationFile.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityConfigurationFileMismatch.kt")
+  public void testStabilityConfigurationFileMismatch() {
+    run("StabilityConfigurationFileMismatch.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityConfigurationFileNoConfig.kt")
+  public void testStabilityConfigurationFileNoConfig() {
+    run("StabilityConfigurationFileNoConfig.kt");
   }
 
   @Test

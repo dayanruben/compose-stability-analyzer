@@ -15,6 +15,7 @@
  */
 package com.skydoves.compose.stability.compiler.lower
 
+import com.skydoves.compose.stability.compiler.FqNameMatcher
 import com.skydoves.compose.stability.compiler.StabilityInfoCollector
 import com.skydoves.compose.stability.runtime.ParameterStability
 import org.jetbrains.kotlin.backend.common.IrElementTransformerVoidWithContext
@@ -49,6 +50,7 @@ public class StabilityAnalyzerTransformer(
   private val projectDependencies: List<String> = emptyList(),
   private val traceAll: Boolean = false,
   private val traceAllThreshold: Int = 2,
+  private val stabilityConfigurationMatchers: List<FqNameMatcher> = emptyList(),
 ) : IrElementTransformerVoidWithContext() {
 
   private val composableFqName = FqName("androidx.compose.runtime.Composable")
@@ -61,6 +63,8 @@ public class StabilityAnalyzerTransformer(
   private val previewFqName = FqName("androidx.compose.ui.tooling.preview.Preview")
   private val nonRestartableComposableFqName =
     FqName("androidx.compose.runtime.NonRestartableComposable")
+  private val nonSkippableComposableFqName =
+    FqName("androidx.compose.runtime.NonSkippableComposable")
   private val readOnlyComposableFqName =
     FqName("androidx.compose.runtime.ReadOnlyComposable")
   private val explicitGroupsComposableFqName =
@@ -158,7 +162,7 @@ public class StabilityAnalyzerTransformer(
             simpleName = functionName,
             visibility = visibility,
             skippable = isSkippable(declaration, parameters),
-            restartable = true, // All composables are restartable by default
+            restartable = isRestartable(declaration),
             returnType = declaration.returnType.render(),
             parameters = parameters,
           ),
@@ -469,7 +473,7 @@ public class StabilityAnalyzerTransformer(
    * 1. Nullable types (MUST be first)
    * 2. Type parameters (T, E, K, V) - RUNTIME
    * 3. Function types (including suspend) - STABLE
-   * 4. Known stable types
+   * 4. Known stable types and stability configuration files types
    * 5. @Stable/@Immutable annotations
    * 6. Primitives
    * 7. String
@@ -544,6 +548,13 @@ public class StabilityAnalyzerTransformer(
       return ParameterStability.RUNTIME
     }
 
+    // 2b'. Stability configuration file types - an explicit user override that a type is stable.
+    // Checked before every instability determination (including the known-unstable Java types
+    // below) so the override always wins, matching the Compose compiler's configuration file.
+    if (isStabilityConfigurationFileType(type)) {
+      return ParameterStability.STABLE
+    }
+
     // 2c. Known unstable types (Java mutable classes)
     // Java classes don't expose mutable fields in Kotlin IR, so we need explicit checks
     if (isKnownUnstableJavaType(fqName)) {
@@ -609,6 +620,7 @@ public class StabilityAnalyzerTransformer(
     if (clazz.hasAnnotation(FqName("kotlinx.parcelize.Parcelize"))) {
       val properties = clazz.declarations
         .filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrProperty>()
+        .filter { it.representsStoredState() }
 
       if (properties.isEmpty()) {
         return ParameterStability.STABLE
@@ -730,13 +742,18 @@ public class StabilityAnalyzerTransformer(
 
     val properties = clazz.declarations
       .filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrProperty>()
+      .filter { it.representsStoredState() }
 
-    // If no visible properties, return superclass stability or stable
-    // This handles sealed classes (STABLE) and passes to further checks
+    // If there are no state-storing properties, defer to the superclass. A bare-UNKNOWN
+    // superclass (an abstract/open base with no destabilizing state) must NOT taint a concrete
+    // subclass — matching the Compose compiler, which drops an `Unknown` superclass. Genuine
+    // inherited stored state never reaches here: it survives the filter above as a resolved
+    // fake-override, keeping the list non-empty. So only a truly unstable/runtime base
+    // propagates (issue #178). This also keeps sealed classes with no properties STABLE.
     if (properties.isEmpty()) {
-      return when {
-        superClassStability != null && superClassStability != ParameterStability.STABLE ->
-          superClassStability
+      return when (superClassStability) {
+        ParameterStability.UNSTABLE -> ParameterStability.UNSTABLE
+        ParameterStability.RUNTIME -> ParameterStability.RUNTIME
         else -> ParameterStability.STABLE
       }
     }
@@ -787,12 +804,45 @@ public class StabilityAnalyzerTransformer(
   }
 
   /**
+   * True when this property stores state — it has a backing field, or (for an inherited fake
+   * override) resolves through its override chain to a declaration that does.
+   *
+   * Computed getter-only properties (e.g. `open val foo: Bar? get() = null`) hold no state and
+   * must be excluded from stability inference. This mirrors the Compose compiler, whose class
+   * inference guards on `member.backingField?.let { ... }` and never inspects the type of a
+   * property without a backing field — so a stateless computed property (even of an interface
+   * type) never makes a class runtime/unstable. Inherited stored `var`/unstable fields still
+   * count, because they resolve through the override chain to a backed declaration (issue #178).
+   */
+  private fun org.jetbrains.kotlin.ir.declarations.IrProperty.representsStoredState(): Boolean {
+    if (backingField != null) return true
+    return resolvesToBackedProperty(this, HashSet())
+  }
+
+  private fun resolvesToBackedProperty(
+    property: org.jetbrains.kotlin.ir.declarations.IrProperty,
+    seen: MutableSet<org.jetbrains.kotlin.ir.symbols.IrPropertySymbol>,
+  ): Boolean {
+    if (property.backingField != null) return true
+    if (!seen.add(property.symbol)) return false
+    return property.overriddenSymbols.any { symbol ->
+      val owner = try {
+        symbol.owner
+      } catch (e: Exception) {
+        null
+      }
+      owner != null && resolvesToBackedProperty(owner, seen)
+    }
+  }
+
+  /**
    * Analyzes value class (inline class) stability.
    * Value classes inherit the stability of their underlying type.
    */
   private fun analyzeValueClass(clazz: IrClass): ParameterStability {
     val properties = clazz.declarations
       .filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrProperty>()
+      .filter { it.representsStoredState() }
 
     val underlyingProperty = properties.firstOrNull()
     if (underlyingProperty != null) {
@@ -884,6 +934,11 @@ public class StabilityAnalyzerTransformer(
   private fun isKnownStableType(type: IrType): Boolean {
     val fqName = type.classFqName?.asString() ?: return false
     return fqName in KNOWN_STABLE_TYPES
+  }
+
+  private fun isStabilityConfigurationFileType(type: IrType): Boolean {
+    val fqName = type.classFqName?.asString() ?: return false
+    return stabilityConfigurationMatchers.any { it.matches(fqName) }
   }
 
   /**
@@ -1039,6 +1094,9 @@ public class StabilityAnalyzerTransformer(
         type.isSuspendFunctionTypeOrSubtype() ||
         type.render().contains("suspend ") ||
         type.render().contains("SuspendFunction") -> "function type"
+      // Checked before @Stable / known-stable to match the analysis precedence: a configured type
+      // is forced stable regardless of its own annotations (issue #176).
+      isStabilityConfigurationFileType(type) -> "stability configuration file type"
       type.hasStableAnnotation() -> "marked @Stable or @Immutable"
       isKnownStableType(type) -> "known stable type"
       else -> "class with no mutable properties"
@@ -1054,14 +1112,36 @@ public class StabilityAnalyzerTransformer(
   }
 
   /**
-   * Determine if a composable function is skippable.
-   * A function is skippable if all parameters are stable.
+   * Determine if a composable function is restartable, i.e. whether the Compose compiler generates
+   * a restart group for it. It does not for `@NonRestartableComposable`, `@ReadOnlyComposable`, or
+   * `@ExplicitGroupsComposable` composables, `inline` functions, or composables that return a
+   * non-`Unit` value (e.g. `@Composable fun rememberFoo(): Foo`). These are the restart-group-relevant
+   * subset of the conditions in [isAutoTraceable] (which additionally filters out non-block bodies,
+   * property getters, `suspend`, `@IgnoreStabilityReport`, and `@Preview`) (issue #184).
+   */
+  private fun isRestartable(declaration: IrFunction): Boolean {
+    if (declaration.hasAnnotation(nonRestartableComposableFqName)) return false
+    if (declaration.hasAnnotation(readOnlyComposableFqName)) return false
+    if (declaration.hasAnnotation(explicitGroupsComposableFqName)) return false
+    if (declaration.isInline) return false
+    if (!declaration.returnType.isUnit()) return false
+    return true
+  }
+
+  /**
+   * Determine if a composable function is skippable. A non-restartable composable (see
+   * [isRestartable]) can never be skipped, and `@NonSkippableComposable` opts out of skipping
+   * explicitly; otherwise a function is skippable if all parameters are stable.
    */
   private fun isSkippable(
     declaration: IrFunction,
     parameters: List<com.skydoves.compose.stability.compiler.ParameterStabilityInfo>,
   ): Boolean {
-    // If any parameter is unstable, the function is not skippable
+    // Skipping requires a restart group, so a non-restartable composable is never skippable.
+    if (!isRestartable(declaration)) return false
+    // @NonSkippableComposable is restartable but opts out of skipping (issue #184).
+    if (declaration.hasAnnotation(nonSkippableComposableFqName)) return false
+    // Otherwise a function is skippable only if all parameters are stable.
     return parameters.all { it.stability == "STABLE" }
   }
 

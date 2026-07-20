@@ -26,8 +26,10 @@ import com.skydoves.compose.stability.runtime.ReceiverKind
 import com.skydoves.compose.stability.runtime.ReceiverStabilityInfo
 import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.analyze
+import org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaFunctionSymbol
-import org.jetbrains.kotlin.analysis.api.symbols.contextParameters
+import org.jetbrains.kotlin.analysis.api.types.KaType
+import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtNamedFunction
 
 /**
@@ -74,18 +76,19 @@ internal object StabilityAnalyzerK2 {
     // Get function symbol
     val functionSymbol = function.symbol
 
-    // Skip analysis for @NonRestartableComposable / @NonSkippableComposable —
-    // these composables have no caching/comparison code, so stability is irrelevant.
-    val hasNonRestartable =
-      function.hasAnnotation(StabilityConstants.Strings.NON_RESTARTABLE_COMPOSABLE)
+    // A non-restartable composable has no restart group, so it can never be skipped, and
+    // @NonSkippableComposable opts out of skipping explicitly. In either case parameter stability
+    // is irrelevant, so skip the analysis. Kept in sync with the compiler's
+    // StabilityAnalyzerTransformer (issue #184).
+    val isRestartable = isRestartableComposable(function, functionSymbol)
     val hasNonSkippable =
       function.hasAnnotation(StabilityConstants.Strings.NON_SKIPPABLE_COMPOSABLE)
-    if (hasNonRestartable || hasNonSkippable) {
+    if (!isRestartable || hasNonSkippable) {
       return ComposableStabilityInfo(
         name = function.name ?: StabilityConstants.Strings.UNKNOWN,
         fqName = functionSymbol.callableId?.asSingleFqName()?.asString()
           ?: StabilityConstants.Strings.UNKNOWN,
-        isRestartable = !hasNonRestartable,
+        isRestartable = isRestartable,
         isSkippable = false,
         isReadonly = function.hasAnnotation(StabilityConstants.Strings.READ_ONLY_COMPOSABLE),
         parameters = emptyList(),
@@ -100,14 +103,35 @@ internal object StabilityAnalyzerK2 {
 
     val inferencer = KtStabilityInferencer(function.project, usageSiteModule)
 
+    // Names of value parameters declared `vararg`, read from the PSI modifier (purely syntactic
+    // and reliable regardless of symbol resolution state; KaValueParameterSymbol.isVararg is not
+    // always populated). A vararg compiles to an array, which is never stable, but the symbol
+    // reports the element type as its returnType, so it would otherwise be read as stable (#175).
+    val varargParameterNames = function.valueParameters
+      .filter { it.hasModifier(KtTokens.VARARG_KEYWORD) }
+      .mapNotNull { it.name }
+      .toSet()
+
     // Analyze value parameters
     val parameters = functionSymbol.valueParameters.map { param ->
-      val paramType = param.returnType
-      val stability = with(inferencer) { ktStabilityOf(paramType) }
+      // A vararg parameter is treated as an array to match a real Array<T> parameter (issue #175).
+      val isVararg = param.name.asString() in varargParameterNames
+      val stability = if (isVararg) {
+        KtStability.Runtime(
+          className = "kotlin.Array",
+          reason = "vararg parameter (compiles to an array)",
+        )
+      } else {
+        with(inferencer) { ktStabilityOf(param.returnType) }
+      }
 
       ParameterStabilityInfo(
         name = param.name.asString(),
-        type = paramType.renderAsString(),
+        type = if (isVararg) {
+          "vararg ${param.returnType.renderAsString()}"
+        } else {
+          param.returnType.renderAsString()
+        },
         stability = stability.toParameterStability(),
         reason = stability.getReasonString(),
       )
@@ -130,8 +154,7 @@ internal object StabilityAnalyzerK2 {
     }
 
     val isSkippableInStrongSkippingMode = isStrongSkippingEnabled && !isNaturallySkippable
-    val isRestartable =
-      !function.hasAnnotation(StabilityConstants.Strings.NON_RESTARTABLE_COMPOSABLE)
+    // isRestartable was computed above; only restartable composables reach this point.
     val isReadonly = function.hasAnnotation(StabilityConstants.Strings.READ_ONLY_COMPOSABLE)
 
     return ComposableStabilityInfo(
@@ -145,6 +168,28 @@ internal object StabilityAnalyzerK2 {
       isSkippableInStrongSkippingMode = isSkippableInStrongSkippingMode,
       receivers = receivers,
     )
+  }
+
+  /**
+   * Whether a @Composable is restartable — i.e. the compiler wraps it in a restart group. A
+   * non-restartable composable has no restart group, so it can never be skipped and its parameter
+   * stability is moot. Mirrors the compiler's StabilityAnalyzerTransformer.isRestartable so the IDE
+   * verdict and the `stabilityDump` output stay in sync (issue #184):
+   * `@NonRestartableComposable`, `@ReadOnlyComposable`, `@ExplicitGroupsComposable`, `inline`, and a
+   * non-`Unit` return type each make a composable non-restartable.
+   */
+  private fun KaSession.isRestartableComposable(
+    function: KtNamedFunction,
+    functionSymbol: KaFunctionSymbol,
+  ): Boolean {
+    if (function.hasAnnotation(StabilityConstants.Strings.NON_RESTARTABLE_COMPOSABLE)) return false
+    if (function.hasAnnotation(StabilityConstants.Strings.READ_ONLY_COMPOSABLE)) return false
+    if (function.hasAnnotation(StabilityConstants.Strings.EXPLICIT_GROUPS_COMPOSABLE)) return false
+    if (function.hasModifier(KtTokens.INLINE_KEYWORD)) return false
+    val returnTypeFqName =
+      functionSymbol.returnType.expandedSymbol?.classId?.asSingleFqName()?.asString()
+    if (returnTypeFqName != "kotlin.Unit") return false
+    return true
   }
 
   /**
@@ -188,12 +233,12 @@ internal object StabilityAnalyzerK2 {
       )
     }
 
-    // 3. Context parameters (formerly context receivers). Migrated to KaContextParameterSymbol
-    // because Kotlin 2.4 / IDEA 2026.3 drops KaContextReceiver + KaContextReceiversOwner
-    // (issue #177, KT-87310); context parameters are stable as of Kotlin 2.4.
-    @Suppress("EXPERIMENTAL_API_USAGE")
-    functionSymbol.contextParameters.forEach { contextParameter ->
-      val contextType = contextParameter.returnType
+    // 3. Context parameters (formerly context receivers). JetBrains asked us to migrate off
+    // KaContextReceiver (removed in IDEA 2026.3 / Kotlin 2.4, issue #177, KT-87310) to
+    // KaContextParameterSymbol. That symbol API does not exist in older IDEs (2024.2 / 2024.3), so
+    // it is read reflectively (see contextParameterReturnTypes) to keep one binary compatible
+    // across the supported IDE range without the plugin verifier flagging a missing symbol.
+    contextParameterReturnTypes(functionSymbol).forEach { contextType ->
       val stability = with(inferencer) { ktStabilityOf(contextType) }
 
       receivers.add(
@@ -208,4 +253,29 @@ internal object StabilityAnalyzerK2 {
 
     return receivers
   }
+
+  /**
+   * Return types of [symbol]'s context parameters, read reflectively.
+   *
+   * `KaCallableSymbol.contextParameters` (and the `KaContextParameterSymbol` element type) only
+   * exist in the Kotlin Analysis API bundled with newer IDEs; older IDEs (2024.2 / 2024.3) do not
+   * ship them. A direct call makes the JetBrains Plugin Verifier report a "method/class not found"
+   * against those IDEs and risks a linkage error at runtime. Reading the property reflectively keeps
+   * a single plugin binary compatible across the whole supported range: IDEs that have the API get
+   * context-parameter stability, and on older IDEs this returns an empty list so context parameters
+   * are simply not analyzed. Each element is kept typed as its stable [KaCallableSymbol] supertype
+   * to avoid referencing `KaContextParameterSymbol`.
+   */
+  private fun KaSession.contextParameterReturnTypes(symbol: KaFunctionSymbol): List<KaType> =
+    runCatching {
+      val kaCallableSymbolKt =
+        Class.forName("org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbolKt")
+      val getContextParameters =
+        kaCallableSymbolKt.methods.first { it.name == "getContextParameters" }
+      val contextParameters = when (getContextParameters.parameterCount) {
+        1 -> getContextParameters.invoke(null, symbol)
+        else -> getContextParameters.invoke(null, this, symbol)
+      }
+      (contextParameters as? List<*>).orEmpty().mapNotNull { (it as? KaCallableSymbol)?.returnType }
+    }.getOrDefault(emptyList())
 }

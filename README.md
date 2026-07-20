@@ -294,7 +294,7 @@ This is incredibly useful for:
 First, add the plugin to the `[plugins]` section of your `libs.versions.toml` file:
 
 ```toml
-stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.10.0" }
+stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.11.0" }
 ```
 
 Then, apply it to your root `build.gradle.kts` with `apply false`:
@@ -316,6 +316,7 @@ It’s **strongly recommended to use the exact same Kotlin version** as this lib
 
 | Stability Analyzer | Kotlin |
 |--------------------|-------------|
+| 0.11.0             | 2.4.0 |
 | 0.10.0             | 2.4.0 |
 | 0.9.0              | 2.4.0 |
 | 0.8.0              | 2.3.21 |
@@ -791,7 +792,16 @@ public fun com.example.DetailScreen(repository: com.example.UserRepository): kot
   restartable: true
   params:
     - repository: UNKNOWN (interface or non-final class; concrete implementation unknown)
+
+@Composable
+public fun com.example.rememberUserState(user: com.example.User): com.example.UserState
+  skippable: false
+  restartable: false
+  params:
+    - user: STABLE (marked @Stable or @Immutable)
 ```
+
+**Skippable vs. restartable.** A composable is `restartable` only when the Compose compiler wraps it in a restart group. It does not for `@NonRestartableComposable`, `@ReadOnlyComposable`, or `@ExplicitGroupsComposable` composables, `inline` functions, or composables that return a non-`Unit` value (such as `rememberUserState` above). A non-restartable composable can never be `skippable`, regardless of how stable its parameters are. `@NonSkippableComposable` is the exception that stays restartable but opts out of skipping (`skippable: false`, `restartable: true`). In `stabilityCheck`, both a `skippable` and a `restartable` `true → false` transition are reported as regressions.
 
 Each parameter is reported with one of four stability values, matching the Compose compiler:
 
