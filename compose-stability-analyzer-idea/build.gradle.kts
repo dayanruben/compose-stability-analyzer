@@ -58,7 +58,12 @@ intellijPlatform {
   pluginConfiguration {
     ideaVersion {
       sinceBuild = "242"
-      untilBuild = "261.*"
+      // No upper bound. The plugin reads the (experimental) Kotlin Analysis API defensively: every
+      // K2 call is guarded and falls back to PSI on any linkage error (see StabilityAnalyzerK2),
+      // and version-specific symbols are accessed reflectively, so it keeps working on newer IDEs.
+      // A fixed until-build only lags each IDE release and blocks installs on otherwise-working
+      // versions (e.g. 2026.2 was excluded by the previous "261.*", issue #191).
+      untilBuild = provider { null }
     }
 
     description = """

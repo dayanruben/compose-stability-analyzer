@@ -59,9 +59,11 @@ internal object StabilityAnalyzerK2 {
       analyze(function) {
         analyzeWithK2Session(function)
       }
-    } catch (e: NoSuchMethodError) {
-      // K2 API incompatibility - fall back to PSI
-      // This can happen in older IDE versions (e.g., Android Studio AI-243)
+    } catch (e: LinkageError) {
+      // K2 Analysis API incompatibility - fall back to PSI. LinkageError covers NoSuchMethodError
+      // (a removed/changed method) and NoClassDefFoundError (a removed class), so the plugin keeps
+      // working on IDEs whose Analysis API differs from the one it was built against, in either
+      // direction. This is what makes an open-ended until-build safe (issue #191).
       null
     } catch (e: Exception) {
       // K2 analysis failed - caller should fall back to PSI
