@@ -32,11 +32,11 @@ import com.skydoves.compose.stability.runtime.ReceiverStabilityInfo
 import org.jetbrains.annotations.TestOnly
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.idea.caches.resolve.analyze
 import org.jetbrains.kotlin.idea.stubindex.KotlinTypeAliasShortNameIndex
 import org.jetbrains.kotlin.idea.caches.resolve.resolveMainReference
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.psi.KtClass
+import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParameter
@@ -46,7 +46,6 @@ import org.jetbrains.kotlin.psi.KtTypeAlias
 import org.jetbrains.kotlin.psi.KtUserType
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
-import org.jetbrains.kotlin.resolve.lazy.BodyResolveMode
 import org.jetbrains.kotlin.types.AbbreviatedType
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.typeUtil.makeNotNullable
@@ -250,7 +249,7 @@ internal object StabilityAnalyzer {
     // expression body, whose inferred type may be non-Unit.
     if (!hasBody() || hasBlockBody()) return false
     return try {
-      val returnType = analyze(BodyResolveMode.PARTIAL)[BindingContext.FUNCTION, this]?.returnType
+      val returnType = analyzePartialOrNull()?.get(BindingContext.FUNCTION, this)?.returnType
       returnType != null &&
         returnType.constructor.declarationDescriptor != null &&
         !KotlinBuiltIns.isUnit(returnType)
@@ -259,6 +258,29 @@ internal object StabilityAnalyzer {
       false
     }
   }
+
+  /**
+   * K1 (old frontend) descriptor resolution, read reflectively.
+   *
+   * `KtElement.analyze(BodyResolveMode)` (compiled to `ResolutionUtils.analyze`) and
+   * `BodyResolveMode` are part of the K1 Analysis API, which IDEs that dropped K1 removed
+   * (IntelliJ IDEA / Android Studio 2026.2+). Referencing them directly makes the plugin verifier
+   * report "class/method not found" and risks a linkage error at runtime. Reading them reflectively
+   * keeps one binary compatible across the range: on IDEs that still ship K1 this resolves the
+   * [BindingContext] as before, and on K2-only IDEs it returns null so the PSI path falls back to
+   * its PSI-only heuristics. [BindingContext] itself is not removed, so it is used directly.
+   */
+  private fun KtElement.analyzePartialOrNull(): BindingContext? = runCatching {
+    val bodyResolveMode = Class.forName("org.jetbrains.kotlin.resolve.lazy.BodyResolveMode")
+    val partial = bodyResolveMode.enumConstants.first { (it as Enum<*>).name == "PARTIAL" }
+    val resolutionUtils = Class.forName("org.jetbrains.kotlin.idea.caches.resolve.ResolutionUtils")
+    val analyzeMethod = resolutionUtils.methods.first { method ->
+      method.name == "analyze" &&
+        method.parameterCount == 2 &&
+        bodyResolveMode.isAssignableFrom(method.parameterTypes[1])
+    }
+    analyzeMethod.invoke(null, this, partial) as? BindingContext
+  }.getOrNull()
 
   /**
    * Analyzes all receivers (extension, dispatch, context) of a function.
@@ -400,8 +422,8 @@ internal object StabilityAnalyzer {
 
     // SECOND: Try descriptor-based analysis (only works in K1 mode)
     val result = try {
-      val bindingContext = param.analyze(BodyResolveMode.PARTIAL)
-      val type = bindingContext.get(BindingContext.TYPE, param.typeReference)
+      val bindingContext = param.analyzePartialOrNull()
+      val type = bindingContext?.get(BindingContext.TYPE, param.typeReference)
 
       if (type != null) {
         val fqName = type.constructor.declarationDescriptor?.fqNameSafe?.asString()
@@ -719,8 +741,8 @@ internal object StabilityAnalyzer {
 
       // Fallback: Try descriptor-based approach for annotations (only works in K1 mode)
       try {
-        val bindingContext = typeRef.analyze(BodyResolveMode.PARTIAL)
-        val type = bindingContext.get(BindingContext.TYPE, typeRef)
+        val bindingContext = typeRef.analyzePartialOrNull()
+        val type = bindingContext?.get(BindingContext.TYPE, typeRef)
 
         if (type != null) {
           // Strip nullability before checking annotations
