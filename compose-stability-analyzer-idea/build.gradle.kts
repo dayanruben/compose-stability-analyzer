@@ -26,7 +26,7 @@ kotlin {
 }
 
 group = "com.github.skydoves"
-version = "0.11.0"
+version = "0.11.1"
 
 repositories {
   mavenLocal()
@@ -38,7 +38,7 @@ repositories {
 }
 
 dependencies {
-  implementation("com.github.skydoves:compose-stability-runtime-jvm:0.11.0")
+  implementation("com.github.skydoves:compose-stability-runtime-jvm:0.11.1")
 
   intellijPlatform {
     intellijIdeaCommunity("2025.2")
@@ -58,7 +58,12 @@ intellijPlatform {
   pluginConfiguration {
     ideaVersion {
       sinceBuild = "242"
-      untilBuild = "261.*"
+      // No upper bound. The plugin reads the (experimental) Kotlin Analysis API defensively: every
+      // K2 call is guarded and falls back to PSI on any linkage error (see StabilityAnalyzerK2),
+      // and version-specific symbols are accessed reflectively, so it keeps working on newer IDEs.
+      // A fixed until-build only lags each IDE release and blocks installs on otherwise-working
+      // versions (e.g. 2026.2 was excluded by the previous "261.*", issue #191).
+      untilBuild = provider { null }
     }
 
     description = """
@@ -74,6 +79,10 @@ intellijPlatform {
             </ul>
         """.trimIndent()
     changeNotes = """
+            <b>0.11.1</b>
+            <ul>
+                <li><b>Fixed: Compatibility with newer IDEs</b> - removed the until-build upper bound so the plugin installs on IntelliJ IDEA / Android Studio 2026.2 and later, and K2 Analysis API access falls back to PSI on any linkage error.</li>
+            </ul>
             <b>0.11.0</b>
             <ul>
                 <li><b>Fixed: Non-restartable composables</b> - @NonRestartableComposable, @ReadOnlyComposable, @ExplicitGroupsComposable, inline, and non-Unit-returning composables now show as not skippable/restartable in gutter icons, tooltips, the Stability Explorer, and Doctor, matching the compiler.</li>
