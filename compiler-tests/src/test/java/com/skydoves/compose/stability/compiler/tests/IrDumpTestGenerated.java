@@ -31,6 +31,12 @@ public class IrDumpTestGenerated extends AbstractIrDumpTest {
   }
 
   @Test
+  @TestMetadata("CrossModuleBinaryDependency.kt")
+  public void testCrossModuleBinaryDependency() {
+    run("CrossModuleBinaryDependency.kt");
+  }
+
+  @Test
   @TestMetadata("InheritedComputedPropertyStability.kt")
   public void testInheritedComputedPropertyStability() {
     run("InheritedComputedPropertyStability.kt");
@@ -64,6 +70,12 @@ public class IrDumpTestGenerated extends AbstractIrDumpTest {
   @TestMetadata("StabilityConfigurationFileNoConfig.kt")
   public void testStabilityConfigurationFileNoConfig() {
     run("StabilityConfigurationFileNoConfig.kt");
+  }
+
+  @Test
+  @TestMetadata("StabilityInferredIsBinaryOnly.kt")
+  public void testStabilityInferredIsBinaryOnly() {
+    run("StabilityInferredIsBinaryOnly.kt");
   }
 
   @Test
