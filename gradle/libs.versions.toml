@@ -1,6 +1,6 @@
 [versions]
 junit = "4.13.2"
-kotlin = "2.4.0"
+kotlin = "2.4.10"
 dokka = "2.2.0"
 jvmTarget = "17"
 kotlinxCollectionsImmutable = "0.4.0"
@@ -12,7 +12,7 @@ androidGradlePlugin = "9.1.1"
 androidxActivity = "1.13.0"
 androidxComposeBom = "2026.05.01"
 jetbrains-compose = "1.11.0"
-compose-stability-analyzer = "0.12.0"
+compose-stability-analyzer = "0.13.0"
 runtimeAnnotation = "1.11.2"
 spotless = "7.0.2"
 shadow = "9.0.0-beta12"
@@ -33,6 +33,10 @@ kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-em
 kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "kotlinxCollectionsImmutable" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+# Marker artifacts for the build-logic included build, so the convention plugin can resolve the
+# KotlinCompile and SpotlessExtension types. Keep in sync with the matching [plugins] entries.
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+spotless-gradle-plugin = { module = "com.diffplug.spotless:spotless-plugin-gradle", version.ref = "spotless" }
 lint-tests = { module = "com.android.tools.lint:lint-tests", version.ref = "lintApi" }
 lint = { module = "com.android.tools.lint:lint", version.ref = "lintApi" }
 lint-checks = { module = "com.android.tools.lint:lint-checks", version.ref = "lintApi" }
