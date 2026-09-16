@@ -17,6 +17,7 @@ package com.skydoves.compose.stability.compiler
 
 import org.jetbrains.kotlin.compiler.plugin.AbstractCliOption
 import org.jetbrains.kotlin.compiler.plugin.CliOption
+import org.jetbrains.kotlin.compiler.plugin.CliOptionProcessingException
 import org.jetbrains.kotlin.compiler.plugin.CommandLineProcessor
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.config.CompilerConfiguration
@@ -42,6 +43,9 @@ public object StabilityAnalyzerConfigurationKeys {
 
   public val KEY_TRACE_ALL_THRESHOLD: CompilerConfigurationKey<Int> =
     CompilerConfigurationKey<Int>("traceAllThreshold")
+
+  public val KEY_STRONG_SKIPPING: CompilerConfigurationKey<Boolean> =
+    CompilerConfigurationKey<Boolean>("strongSkipping")
 
   public val KEY_STABILITY_CONFIGURATION_FILES: CompilerConfigurationKey<List<File>> =
     CompilerConfigurationKey<List<File>>("stabilityConfigurationFiles")
@@ -98,6 +102,19 @@ public class StabilityAnalyzerCommandLineProcessor : CommandLineProcessor {
       required = false,
     )
 
+    /**
+     * Mirrors the Compose compiler's `StrongSkipping` feature flag, which is enabled by default
+     * (`ComposePlugin.FeatureFlag.StrongSkipping`). With strong skipping on, an unstable parameter
+     * no longer prevents a restartable composable from skipping, so the reported `skippable`
+     * verdict must follow the same rule or it contradicts the compiler.
+     */
+    public val OPTION_STRONG_SKIPPING: CliOption = CliOption(
+      optionName = "strongSkipping",
+      valueDescription = "<true|false>",
+      description = "Report skippability using Compose's strong skipping semantics",
+      required = false,
+    )
+
     public val OPTION_STABILITY_CONFIGURATION_FILE: CliOption = CliOption(
       optionName = "stabilityConfigurationFile",
       valueDescription = "<path>",
@@ -116,6 +133,7 @@ public class StabilityAnalyzerCommandLineProcessor : CommandLineProcessor {
     OPTION_PROJECT_DEPENDENCIES,
     OPTION_TRACE_ALL,
     OPTION_TRACE_ALL_THRESHOLD,
+    OPTION_STRONG_SKIPPING,
     OPTION_STABILITY_CONFIGURATION_FILE,
   )
 
@@ -128,7 +146,7 @@ public class StabilityAnalyzerCommandLineProcessor : CommandLineProcessor {
     when (option) {
       OPTION_ENABLED -> configuration.put(
         StabilityAnalyzerConfigurationKeys.KEY_ENABLED,
-        value.toBoolean(),
+        value.toBooleanOrFail("enabled"),
       )
 
       OPTION_STABILITY_OUTPUT_DIR -> configuration.put(
@@ -141,12 +159,17 @@ public class StabilityAnalyzerCommandLineProcessor : CommandLineProcessor {
 
       OPTION_TRACE_ALL -> configuration.put(
         StabilityAnalyzerConfigurationKeys.KEY_TRACE_ALL,
-        value.toBoolean(),
+        value.toBooleanOrFail("traceAll"),
       )
 
       OPTION_TRACE_ALL_THRESHOLD -> configuration.put(
         StabilityAnalyzerConfigurationKeys.KEY_TRACE_ALL_THRESHOLD,
         value.toIntOrNull() ?: 2,
+      )
+
+      OPTION_STRONG_SKIPPING -> configuration.put(
+        StabilityAnalyzerConfigurationKeys.KEY_STRONG_SKIPPING,
+        value.toBooleanOrFail("strongSkipping"),
       )
 
       OPTION_STABILITY_CONFIGURATION_FILE -> configuration.appendList(
@@ -155,4 +178,15 @@ public class StabilityAnalyzerCommandLineProcessor : CommandLineProcessor {
       )
     }
   }
+
+  /**
+   * `String.toBoolean()` maps every value that is not "true" to `false`, so a typo such as
+   * `strongSkipping=treu` would silently invert the option and produce a report that disagrees with
+   * the code the Compose compiler generates. Fail loudly instead; the Gradle plugin always passes a
+   * real `Boolean.toString()`, so only a hand-written compiler argument can reach this.
+   */
+  private fun String.toBooleanOrFail(optionName: String): Boolean =
+    toBooleanStrictOrNull() ?: throw CliOptionProcessingException(
+      "Invalid value for '$optionName': '$this'. Expected 'true' or 'false'.",
+    )
 }
