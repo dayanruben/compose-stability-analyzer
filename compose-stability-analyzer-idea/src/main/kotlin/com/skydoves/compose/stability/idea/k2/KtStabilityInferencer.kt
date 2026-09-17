@@ -31,7 +31,6 @@ import org.jetbrains.kotlin.analysis.api.symbols.KaPropertyGetterSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaPropertySymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaSymbolModality
 import org.jetbrains.kotlin.analysis.api.types.KaType
-import org.jetbrains.kotlin.analysis.api.types.KaTypeNullability
 
 /**
  * K2 Analysis API-based stability inferencer.
@@ -111,9 +110,8 @@ internal class KtStabilityInferencer(
     val expandedType = type.fullyExpandedType
 
     // 1. Nullable types - MUST be checked first to strip nullability
-    // Use KaTypeNullability enum for compatibility with Android Studio AI-243
     val nonNullableType = if (expandedType.isMarkedNullable) {
-      expandedType.withNullability(KaTypeNullability.NON_NULLABLE)
+      withoutNullabilityReflective(expandedType)
     } else {
       expandedType
     }
@@ -718,6 +716,33 @@ internal class KtStabilityInferencer(
   private fun KaPropertySymbol.isComputedGetterOnly(): Boolean = runCatching {
     !isDelegatedProperty && !hasBackingField && (getter?.isNotDefaultReflective() == true)
   }.getOrDefault(false)
+
+  /**
+   * `KaSession.withNullability`, called reflectively because the Analysis API changed its shape.
+   *
+   * IDEs from 2024.2 through 2025.1 ship only `withNullability(KaType, KaTypeNullability)`, newer
+   * ones add `withNullability(KaType, Boolean)`, and Kotlin 2.5 deprecates the enum at `HIDDEN`
+   * level, which makes it an unresolved reference that `@Suppress` cannot reach. Binding to either
+   * overload at compile time therefore breaks one end of the supported range: calling the boolean
+   * one directly made the Plugin Verifier report "method not found" against 242, 243 and 251.
+   * Resolving at runtime keeps a single binary working across all of them.
+   *
+   * Falling back to the original type is safe: every downstream use here reads the expanded class
+   * symbol, the function-type flags or the annotations, none of which depend on nullability.
+   */
+  private fun KaSession.withoutNullabilityReflective(type: KaType): KaType = runCatching {
+    val methods = javaClass.methods.filter { it.name == "withNullability" && it.parameterCount == 2 }
+
+    methods.firstOrNull { it.parameterTypes[1] == java.lang.Boolean.TYPE }
+      ?.let { return@runCatching it.invoke(this, type, false) as? KaType }
+
+    val enumMethod = methods.firstOrNull { it.parameterTypes[1].isEnum }
+      ?: return@runCatching null
+    val nonNullable = enumMethod.parameterTypes[1].enumConstants
+      ?.firstOrNull { (it as? Enum<*>)?.name == "NON_NULLABLE" }
+      ?: return@runCatching null
+    enumMethod.invoke(this, type, nonNullable) as? KaType
+  }.getOrNull() ?: type
 
   /**
    * `KaPropertyGetterSymbol.isNotDefault`, read reflectively.

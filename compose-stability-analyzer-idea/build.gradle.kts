@@ -27,7 +27,7 @@ kotlin {
 }
 
 group = "com.github.skydoves"
-version = "0.13.0"
+version = "0.14.0"
 
 repositories {
   mavenLocal()
@@ -39,7 +39,7 @@ repositories {
 }
 
 dependencies {
-  implementation("com.github.skydoves:compose-stability-runtime-jvm:0.13.0")
+  implementation("com.github.skydoves:compose-stability-runtime-jvm:0.14.0")
 
   intellijPlatform {
     intellijIdeaCommunity("2025.2")
@@ -80,6 +80,14 @@ intellijPlatform {
             </ul>
         """.trimIndent()
     changeNotes = """
+            <b>0.14.0</b>
+            <ul>
+                <li><b>Gutter icons and stabilityDump now agree on skippability</b> - the IDE already modelled Compose's strong skipping, which is on by default in the compiler, but the report side did not. Measured against the Compose compiler's own metrics, 38% of composables carried the wrong skippable verdict in the generated .stability file. Fixed in library 0.14.0.</li>
+                <li><b>Restartability matches the compiler</b> - open members of non-final classes (including interface methods with a body), abstract declarations and local composables now show as non-restartable, and @ReadOnlyComposable no longer does: a Unit-returning read-only composable really is restartable.</li>
+                <li><b>Heatmap durations no longer read as 0.00ms</b> on devices whose locale uses a comma decimal separator (de, fr, pt-BR, ru, tr, id). The Stability Doctor's measured waste was affected too.</li>
+                <li><b>Generic type arguments are honoured</b> - Pair&lt;String, MutableUser&gt; and immutable collections with an unstable element type are no longer reported stable.</li>
+                <li><b>Updated to Kotlin 2.4.20.</b></li>
+            </ul>
             <b>0.13.0</b>
             <ul>
                 <li><b>Editor verdicts and stabilityDump now agree on same-module types</b> - the compiler plugin used to mark a module's own types unstable whenever a sibling Gradle module's group happened to be a package prefix, and it honoured @StabilityInferred on source classes, where the annotation is only present depending on compiler-plugin ordering. Both are fixed in library 0.13.0, so gutter icons, tooltips and the Stability Explorer no longer disagree with the generated .stability report.</li>
@@ -235,9 +243,11 @@ intellijPlatform {
     ides {
       recommended()
     }
-    // Pre-existing K2 API issues (KaSessionProvider.handleAnalysisException) in 242-251
-    // cause false positives — the plugin gracefully falls back to PSI on older IDEs.
-    // 261 (2026.1 EAP) uses the unified "idea" artifact which the verifier cannot resolve yet.
+    // COMPATIBILITY_PROBLEMS is deliberately absent: older supported IDEs report a handful of
+    // reviewed, accepted problems (see checkNoNewCompatibilityProblems, which fails on anything
+    // outside that allowlist). Enabling it here would fail on those too, and the verifier's own
+    // ignored-problems file cannot express them because its grammar rejects a description
+    // containing a colon, which every method signature has.
     failureLevel = listOf(
       org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel.INVALID_PLUGIN,
       org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel.NOT_DYNAMIC,
@@ -246,6 +256,70 @@ intellijPlatform {
 }
 
 tasks {
+  /**
+   * Fails on any compatibility problem the Plugin Verifier reports that is not in the allowlist.
+   *
+   * 0.14.0 shipped a real one: a direct call to `KaSession.withNullability(KaType, Boolean)`, an
+   * overload absent from the Kotlin plugin bundled with IDEs 242, 243 and 251. The verifier caught
+   * it, but `failureLevel` excluded COMPATIBILITY_PROBLEMS wholesale, so CI stayed green and the
+   * problem only surfaced on the Marketplace. Every K2 symbol that legitimately varies across the
+   * supported range is accessed reflectively instead, so the allowlist should shrink, never grow.
+   *
+   * Problems are matched as whole entries rather than by extracting a symbol from a known phrasing:
+   * the verifier emits several categories ("unresolved method", "attempt to invoke an abstract
+   * method", "illegal access", ...) and keying off one of them would let the others through
+   * silently. The entry count is cross-checked against the verdict line so a parsing drift fails
+   * loudly instead of quietly passing.
+   */
+  val checkNoNewCompatibilityProblems by registering {
+    val reports = layout.buildDirectory.dir("reports/pluginVerifier")
+    inputs.dir(reports).optional(true)
+    doLast {
+      val acceptedProblems = listOf(
+        // Falls back to the PSI analyzer on a linkage error.
+        "KaSessionProvider.handleAnalysisException",
+        "KaReceiverParameterSymbol.getReturnType",
+        // Settings UI helper added after 2024.2; only reached when a user opens the settings panel.
+        "Row.textFieldWithBrowseButton",
+      )
+      val failures = mutableListOf<String>()
+
+      reports.get().asFile.walkTopDown()
+        .filter { it.name == "verification-verdict.txt" }
+        .forEach { verdict ->
+          val ide = verdict.toPath().toString()
+            .substringAfter("pluginVerifier/").substringBefore("/")
+          val reported = Regex("""(\d+) compatibility problems?""")
+            .find(verdict.readText())?.groupValues?.get(1)?.toInt() ?: 0
+
+          val problemsFile = verdict.resolveSibling("compatibility-problems.txt")
+          // A problem starts at column 0; indented lines and the "The method might have been
+          // declared ..." tail belong to the entry above it.
+          val entries = problemsFile.takeIf { it.exists() }?.readLines().orEmpty()
+            .filter { it.isNotBlank() && !it.startsWith(" ") }
+            .filterNot { it.startsWith("The method might have been declared") }
+
+          if (entries.size != reported) {
+            failures += "$ide: parsed ${entries.size} problems but the verdict reports $reported; " +
+              "the report format changed and this check can no longer be trusted"
+          }
+          entries.filterNot { entry -> acceptedProblems.any { entry.contains(it) } }
+            .forEach { failures += "$ide: ${it.take(200)}" }
+        }
+
+      if (failures.isNotEmpty()) {
+        error(
+          "New binary incompatibilities reported by the Plugin Verifier:\n" +
+            failures.joinToString("\n") { "  $it" } +
+            "\n\nAccess the symbol reflectively (see withoutNullabilityReflective) or, if the " +
+            "problem is genuinely acceptable, add it to acceptedProblems with a justification.",
+        )
+      }
+    }
+  }
+
+  named("verifyPlugin") { finalizedBy(checkNoNewCompatibilityProblems) }
+
   withType<JavaCompile> {
     sourceCompatibility = "17"
     targetCompatibility = "17"
