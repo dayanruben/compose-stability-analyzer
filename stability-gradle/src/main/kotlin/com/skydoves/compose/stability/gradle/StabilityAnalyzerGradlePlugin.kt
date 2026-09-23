@@ -22,7 +22,10 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
+import org.jetbrains.kotlin.gradle.tasks.Kotlin2JsCompile
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompileCommon
+import java.io.File
 
 /**
  * Gradle plugin for Compose Stability Analyzer.
@@ -58,6 +61,59 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
 
     /** Maven coordinate of the runtime this plugin version pairs with. */
     internal const val RUNTIME_DEPENDENCY: String = "$GROUP_ID:$RUNTIME_ARTIFACT_ID:$VERSION"
+
+    /**
+     * Builds the compiler plugin options. Extracted from [applyToCompilation] so the choice of
+     * `SubpluginOption` subtype can be asserted in a unit test: the subtype decides whether a
+     * value lands in KGP's `@Input` task args, and therefore in the build cache key.
+     *
+     * Every path-valued option must be a [FilesSubpluginOption]. See the call sites below.
+     */
+    internal fun subpluginOptions(
+      enabled: Boolean,
+      stabilityOutputDir: File,
+      traceAllEnabled: Boolean,
+      traceAllThreshold: Int,
+      strongSkipping: Boolean,
+      stabilityConfigurationFiles: List<File>,
+    ): List<SubpluginOption> = listOf(
+      SubpluginOption(key = OPTION_ENABLED, value = enabled.toString()),
+      // FilesSubpluginOption, not a plain SubpluginOption: KGP exposes every plain option through
+      // `CompilerPluginConfig.getAsTaskInputArgs()`, which is annotated `@Input`, so an absolute
+      // path there becomes part of the build cache key. That made the checkout location a cache
+      // input and broke remote cache sharing between machines and worktrees (issue #212). Only
+      // `InternalSubpluginOption` and `FilesSubpluginOption` are excluded from those input args,
+      // and the latter still passes the absolute path to the compiler, which the plugin needs.
+      // The directory is declared as a task output in `apply`, so a cache hit restores it. This
+      // mirrors how the Compose compiler plugin passes `reportsDestination`.
+      //
+      // This only helps compilations that carry options as `@Nested pluginOptions`, meaning JVM,
+      // JS and metadata. `KotlinNativeCompile` instead declares `compilerPluginCommandLine`, which
+      // is `CompilerPluginOptions.arguments` and applies no subtype filtering at all, as a plain
+      // `@Input`. Native compilations therefore still carry the path in their cache key and no
+      // option subtype can change that.
+      FilesSubpluginOption(
+        key = OPTION_STABILITY_OUTPUT_DIR,
+        files = listOf(stabilityOutputDir),
+      ),
+      SubpluginOption(key = OPTION_TRACE_ALL, value = traceAllEnabled.toString()),
+      SubpluginOption(key = OPTION_TRACE_ALL_THRESHOLD, value = traceAllThreshold.toString()),
+      SubpluginOption(key = OPTION_STRONG_SKIPPING, value = strongSkipping.toString()),
+    ) + stabilityConfigurationFiles.map { file ->
+      // One FilesSubpluginOption per file, so each option value is a single path, and the path
+      // stays out of the task input args for the same cache-key reason as above.
+      //
+      // Note this does NOT make the file a compile-task input. KGP branches on
+      // `is FilesSubpluginOption` in exactly one place, the exclusion in `computeForSubpluginId`,
+      // and registers nothing from `files`. So editing a configuration file's contents in place
+      // currently leaves the Kotlin compilation UP-TO-DATE and stability-info.json stale, which is
+      // the defect issue #176 aimed at and did not actually close. Fixing it needs the files
+      // declared as real task inputs, not a different option subtype.
+      FilesSubpluginOption(
+        key = OPTION_STABILITY_CONFIGURATION_FILE,
+        files = listOf(file),
+      )
+    }
   }
 
   override fun apply(target: Project) {
@@ -79,10 +135,26 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
       }
     registrar.registerStabilityTasks(target, extension)
 
-    // Per-task output directory to avoid shared output conflicts with other plugins (Issue #153)
-    target.tasks.withType(KotlinCompile::class.java).configureEach {
-      val stabilityDir = target.layout.buildDirectory.dir("stability/$name")
-      outputs.dir(stabilityDir).optional(true)
+    // Per-task output directory to avoid shared output conflicts with other plugins (Issue #153).
+    //
+    // All three task types are covered, not just the JVM one. They are exactly the compilations
+    // that carry plugin options as KGP's `@Nested pluginOptions`, which is what issue #212 made
+    // relocatable. Declaring the output only for KotlinCompile left `compileKotlinJs` and the
+    // metadata compilation able to hit the cache with nothing restoring their report: measured on
+    // a relocated KMP checkout, compileKotlinJs came back FROM-CACHE with no stability-info.json
+    // while the JVM one was restored. KotlinNativeCompile is deliberately absent, because it
+    // exposes plugin options as an `@Input` command line that no option subtype can keep out of
+    // the cache key, so it never gets a cross-checkout hit in the first place.
+    val compileTaskTypes = listOf(
+      KotlinCompile::class.java,
+      Kotlin2JsCompile::class.java,
+      KotlinCompileCommon::class.java,
+    )
+    compileTaskTypes.forEach { taskType ->
+      target.tasks.withType(taskType).configureEach {
+        val stabilityDir = target.layout.buildDirectory.dir("stability/$name")
+        outputs.dir(stabilityDir).optional(true)
+      }
     }
 
     // Disable incremental compilation when this project's stability tasks are in the graph
@@ -173,37 +245,14 @@ public class StabilityAnalyzerGradlePlugin : KotlinCompilerPluginSupportPlugin {
         .stabilityConfigurationFiles
         .getOrElse(emptyList())
 
-      listOf(
-        SubpluginOption(
-          key = OPTION_ENABLED,
-          value = extension.enabled.get().toString(),
-        ),
-        SubpluginOption(
-          key = OPTION_STABILITY_OUTPUT_DIR,
-          value = stabilityDir.get().asFile.absolutePath,
-        ),
-        SubpluginOption(
-          key = OPTION_TRACE_ALL,
-          value = traceAllEnabled.toString(),
-        ),
-        SubpluginOption(
-          key = OPTION_TRACE_ALL_THRESHOLD,
-          value = extension.traceAll.threshold.get().toString(),
-        ),
-        SubpluginOption(
-          key = OPTION_STRONG_SKIPPING,
-          value = strongSkipping.toString(),
-        ),
-      ) + stabilityConfigurationFiles.map { file ->
-        // FilesSubpluginOption (one per file, so each option value is a single path) registers the
-        // configuration file as a compile-task input, so editing its contents invalidates the
-        // Kotlin compilation and regenerates stability-info.json. A plain SubpluginOption would only
-        // track the path string, leaving stale results when the file changes in place (issue #176).
-        FilesSubpluginOption(
-          key = OPTION_STABILITY_CONFIGURATION_FILE,
-          files = listOf(file.asFile),
-        )
-      }
+      subpluginOptions(
+        enabled = extension.enabled.get(),
+        stabilityOutputDir = stabilityDir.get().asFile,
+        traceAllEnabled = traceAllEnabled,
+        traceAllThreshold = extension.traceAll.threshold.get(),
+        strongSkipping = strongSkipping,
+        stabilityConfigurationFiles = stabilityConfigurationFiles.map { it.asFile },
+      )
     }
   }
 
