@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`unstableOnly` no longer drops composables that `stabilityCheck` then reports.** The baseline was filtered by `skippable` alone, while `compareStability` decides whether a *new* composable is a regression with `hasUnstableParameter` (#192). Under strong skipping those disagree constantly: a composable stays skippable while a parameter is `UNSTABLE`, `RUNTIME` or `UNKNOWN`, so the entry was written out of the baseline and reported as a new unstable composable on the very next check, with no way to accept it because `stabilityDump` dropped it again. The baseline is now filtered by the union issue #128 asked for, recording a composable when it has an unstable parameter, or is not skippable, or is not restartable. That is a superset of the predicate the check reports new composables on, so a dumped baseline can no longer report its own code. On one 54-module project, 296 of 1,543 entries were affected.
+- **`unstableOnly` now says so when it needs `ignoreNonRegressiveChanges`.** The filtered entries are absent from the baseline, and without that option `stabilityCheck` reports every missing composable as a new one, which fails the build just as permanently. `stabilityDump` now warns, naming the option and the number of entries it dropped, instead of leaving the combination to fail silently.
+
+Stability inference is now checked rule-by-rule against the Compose compiler's own `analysis/Stability.kt`, and several rules were wrong. The sample app is verified against the compiler's own metrics output: **0 skippable and 0 restartable disagreements across 49 composables**.
+
+- **A delegated `var` no longer makes a class unstable.** Compose exempts it (`if (member.isVar && !member.isDelegated) return Unstable`) and scores the delegate instead, so the canonical state holder is stable:
+  ```kotlin
+  class UiState { var text by mutableStateOf("") }   // was UNSTABLE, Compose says stable
+  ```
+  This told users the correct Compose pattern was broken. Properties are now scored by their backing field type, as Compose does, so `var x by mutableStateOf(...)` is seen as the `@Stable MutableState` it is.
+- **`@StabilityInferred` was decoded backwards.** The `parameters` value is a bitmask, not a boolean: bits `0..n-1` mark which type parameters the stability depends on and bit `n` is a "known stable" sentinel, so for a class with no type parameters `1` means stable and `0` means not stable. Reading it as `== 0 -> STABLE` reported cross-module classes the compiler had marked **unstable** as **STABLE** — the one direction that makes a user do nothing when they should act. Fixed in the compiler and at both IDE sites.
+- **Open, abstract and sealed classes no longer short-circuit to `UNKNOWN`.** The Compose compiler has no such rule; `modality == FINAL ? Stable : Unknown` is the *seed* of its member loop, so a non-final class still becomes unstable from a `var` or an unstable member and still reaches the cross-module rules. Short-circuiting skipped all of that: `androidx.lifecycle.ViewModel` reported `UNKNOWN` where the compiler says unstable, and a sealed class with no stored properties reported **STABLE** where the compiler says uncertain.
+- **A superclass now contributes unconditionally.** It was only consulted when the subclass declared no state of its own, so `class Foo : ViewModel() { val a = "" }` reported **STABLE** while the compiler reported unstable. Only the single class supertype is considered, matching Compose; scanning every supertype made the verdict depend on the order they were written (`class A : Marker, ViewModel()` and `class A : ViewModel(), Marker` disagreed).
+- **`object` declarations are stable**, a rule that was missing entirely. A singleton's identity never changes, so its properties cannot destabilize a parameter of its type.
+- **`vararg` parameters are scored by their element type**, not the synthesized `Array<out T>`, which is a stdlib stub and made every vararg parameter UNSTABLE. Applied to both the report and the recomposition-tracing path, which must agree because the log line is a wire protocol the IDE parses.
+- **Suspend function types are no longer claimed stable.** Compose's stable shortcut covers ordinary and `@Composable` function types only, so a `kotlin.coroutines.SuspendFunctionN` is analysed as the interface it is.
+- **The IDE now resolves `@StableMarker` as a rule**, walking supertypes, so a project's own marker annotation works there as it already did in the compiler, and it recognises `object` declarations and delegated `var`s the same way.
+- **`stabilityConfigurationFiles` reaches the compiler again.** The compiler read the top-level Gradle property while the dump and check tasks read the deprecated nested one, and the README documents the nested form: a configuration written the documented way was honoured by `stabilityCheck` but silently ignored by the compiler's own inference. Both forms are now merged for every consumer.
+
+### Migration
+
+Verdicts change for real code, so **run `./gradlew stabilityDump` once after upgrading** and commit the result. The corrections move some parameters in both directions: `STABLE -> UNSTABLE` where a class inherits from an unstable base, `STABLE -> UNKNOWN` for sealed classes, and `UNSTABLE -> STABLE` for state holders built on delegated `var`s.
+
+### Known gap
+
+A user-defined generic class is still reported `RUNTIME` regardless of its type argument. The Compose compiler records such a class as `Stability.Parameter(T)` and substitutes the actual argument at each use site, so `UiResult<Unit>` is stable there and merely `RUNTIME` here. Implementing that needs an argument-aware recursion guard and is tracked separately.
+
 ## [0.14.0] - 2026-09-16
 
 ### Changed

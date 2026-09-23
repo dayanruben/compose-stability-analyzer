@@ -37,8 +37,15 @@ internal class JvmStabilityTaskRegistrar : StabilityTaskRegistrar() {
       outputDir.set(extension.stabilityValidation.outputDir)
       ignoredPackages.set(extension.stabilityValidation.ignoredPackages)
       ignoredClasses.set(extension.stabilityValidation.ignoredClasses)
-      stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
+      stabilityConfigurationFiles.set(
+        project.provider {
+          extension.resolvedStabilityConfigurationFiles()
+        },
+      )
       unstableOnly.set(extension.stabilityValidation.unstableOnly)
+      ignoreNonRegressiveChanges.set(
+        extension.stabilityValidation.ignoreNonRegressiveChanges,
+      )
     }
 
     // Register stability check task
@@ -59,7 +66,11 @@ internal class JvmStabilityTaskRegistrar : StabilityTaskRegistrar() {
       quietCheck.set(extension.stabilityValidation.quietCheck)
       ignoreNonRegressiveChanges.set(extension.stabilityValidation.ignoreNonRegressiveChanges)
       allowMissingBaseline.set(extension.stabilityValidation.allowMissingBaseline)
-      stabilityConfigurationFiles.set(extension.stabilityValidation.stabilityConfigurationFiles)
+      stabilityConfigurationFiles.set(
+        project.provider {
+          extension.resolvedStabilityConfigurationFiles()
+        },
+      )
     }
 
     // Make check task depend on stabilityCheck if enabled (only if check task exists)

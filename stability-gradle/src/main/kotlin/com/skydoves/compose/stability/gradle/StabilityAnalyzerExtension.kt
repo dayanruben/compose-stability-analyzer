@@ -94,6 +94,20 @@ public abstract class StabilityAnalyzerExtension @Inject constructor(
 }
 
 /**
+ * Every stability configuration file the build declares, from the top-level property and from the
+ * deprecated nested one, de-duplicated by path.
+ *
+ * Both the compiler plugin and the dump/check tasks must see the same set. They previously read one
+ * property each, so a configuration written the way the README documents reached `stabilityCheck`
+ * but never reached the compiler's inference.
+ */
+@Suppress("DEPRECATION")
+public fun StabilityAnalyzerExtension.resolvedStabilityConfigurationFiles(): List<RegularFile> = (
+  stabilityConfigurationFiles.getOrElse(emptyList()) +
+    stabilityValidation.stabilityConfigurationFiles.getOrElse(emptyList())
+  ).distinctBy { it.asFile.absolutePath }
+
+/**
  * Configuration for trace-all auto-instrumentation.
  *
  * When enabled, the compiler plugin instruments every restartable composable in the module for
@@ -277,8 +291,14 @@ public abstract class StabilityValidationConfig @Inject constructor(
     objects.property(Boolean::class.javaObjectType).convention(false)
 
   /**
-   * When true, only unstable composables (not skippable) are included in the baseline file.
-   * This reduces baseline file size in large projects and lets you focus on fixing stability issues.
+   * When true, only composables with a stability issue are included in the baseline file: those
+   * with at least one unstable parameter, plus those the compiler could not make skippable or
+   * restartable. This reduces baseline file size in large projects and lets you focus on fixing
+   * stability issues.
+   *
+   * Pair this with [ignoreNonRegressiveChanges]. The entries dropped here are absent from the
+   * baseline, and without that option `stabilityCheck` reports every composable missing from the
+   * baseline as a new one.
    *
    * Default: false
    */
