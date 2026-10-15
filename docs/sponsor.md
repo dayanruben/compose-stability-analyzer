@@ -2,6 +2,12 @@
 
 The sponsors listed below made it possible for this project to be released as open source. Many thanks to all of them for their support!
 
+## Switch
+
+<a href="https://devtoolsacademy.link/Jaewoong"><img alt="Switch" src="https://github.com/skydoves/compose-stability-analyzer/raw/main/art/logo-switch-dark.svg" width="300"/></a>
+
+**[Switch](https://devtoolsacademy.link/Jaewoong)** is an **open-source**, self-hostable platform that connects any AI agent to your team in Slack, Teams & Discord. The code lives on GitHub, so you can inspect it and run it on your own infrastructure.
+
 ## Vision Agents
 
 <a href="https://github.com/GetStream/Vision-Agents/?utm_source=github&utm_medium=devrel&utm_campaign=jaewoong-github"><img alt="Vision Agents" src="https://github.com/skydoves/compose-stability-analyzer/raw/main/art/logo-vision-agents.png" width="300"/></a>
@@ -10,7 +16,7 @@ The sponsors listed below made it possible for this project to be released as op
 
 ## CodeRabbit
 
-<a href="https://coderabbit.link/Jaewoong" target="_blank"><img width="300" alt="CodeRabbit" src="https://github.com/skydoves/compose-stability-analyzer/raw/main/art/logo-coderabbit.png" /></a>
+<a href="https://coderabbit.link/Jaewoong" target="_blank"><img width="300" alt="CodeRabbit" src="https://github.com/skydoves/compose-stability-analyzer/raw/main/art/logo-coderabbit-dark.png" /></a>
 
 **[CodeRabbit](https://coderabbit.link/Jaewoong)** is an AI-powered code review platform that integrates directly into pull-request workflows and IDEs, examining code changes in context and suggesting improvements.
 
