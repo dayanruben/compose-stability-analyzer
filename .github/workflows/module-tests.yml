@@ -109,7 +109,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build stability-gradle
-        run: ./gradlew :stability-gradle:build --no-daemon --stacktrace
+        run: ./gradlew :stability-gradle:build --no-daemon --stacktrace -PRELEASE_SIGNING_ENABLED=false
 
       - name: Run stability-gradle tests
         run: ./gradlew :stability-gradle:test --no-daemon --stacktrace
