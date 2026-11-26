@@ -29,12 +29,16 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Task to dump composable stability information to a file.
  *
  * Similar to apiDump from binary-compatibility-validator.
  */
+@DisableCachingByDefault(
+  because = "A stability baseline should only be written by an explicit dump task invocation.",
+)
 public abstract class StabilityDumpTask : DefaultTask() {
 
   /**
@@ -42,6 +46,7 @@ public abstract class StabilityDumpTask : DefaultTask() {
    * Using InputFiles instead of InputFile to allow the file to not exist yet.
    */
   @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
   public abstract val stabilityInputFiles: ConfigurableFileCollection
 
   /**

@@ -27,12 +27,14 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Task to check if composable stability matches the dumped stability file.
  *
  * Similar to apiCheck from binary-compatibility-validator.
  */
+@DisableCachingByDefault(because = "This validation task has no outputs to cache.")
 public abstract class StabilityCheckTask : DefaultTask() {
 
   /**

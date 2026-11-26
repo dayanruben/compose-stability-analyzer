@@ -26,14 +26,22 @@ plugins {
 group = project.property("GROUP") as String
 version = project.property("VERSION_NAME") as String
 
+val stabilityRuntime = project(":stability-runtime")
+
 kotlin {
   explicitApi()
 }
 
 pluginDevKit {
   compilerPlugin(project(":stability-compiler"))
-  companionLibrary(project(":stability-runtime"))
+  companionLibrary(
+    "${project.property("GROUP")}:${stabilityRuntime.property("POM_ARTIFACT_ID")}:${project.property("VERSION_NAME")}",
+  )
   pluginPackage = "com.skydoves.compose.stability.compiler"
+}
+
+tasks.named("installForFunctionalTest") {
+  dependsOn(":stability-runtime:publishToMavenLocal")
 }
 
 dependencies {
